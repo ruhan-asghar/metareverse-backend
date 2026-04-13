@@ -8,3 +8,5 @@ dist/
 build/
 _slack_*
 remote_log.md
+
+.vercel
