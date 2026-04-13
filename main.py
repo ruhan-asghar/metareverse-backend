@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -41,6 +43,15 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
+# X-Robots-Tag middleware — block search engine indexing on all responses
+class NoIndexMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+app.add_middleware(NoIndexMiddleware)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +72,11 @@ app.include_router(team.router, prefix="/api/v1")
 app.include_router(uploads.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
 app.include_router(sse.router, prefix="/api/v1")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    return "User-agent: *\nDisallow: /\n"
 
 
 @app.get("/")
