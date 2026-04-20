@@ -85,19 +85,25 @@ class MockMetaClient:
         end = datetime.fromisoformat(until).date()
         days = (end - start).days + 1
         rng = random.Random(f"{page_id}:{since}")
-        base_reach = rng.randint(5000, 15000)
+        base_viewers = rng.randint(5000, 15000)
         out = []
         for i in range(days):
             d = start + timedelta(days=i)
             growth = 1 + (i * 0.002)
             noise = rng.uniform(0.85, 1.15)
-            reach = int(base_reach * growth * noise)
+            viewers = int(base_viewers * growth * noise)
+            views = int(viewers * rng.uniform(1.2, 1.8))
+            interactions = int(viewers * rng.uniform(0.03, 0.08))
             out.append(PageInsightPoint(
                 date=d.isoformat(),
-                reach=reach,
-                impressions=int(reach * rng.uniform(1.2, 1.8)),
-                engagement=int(reach * rng.uniform(0.03, 0.08)),
-                followers=10000 + i * rng.randint(5, 25),
+                views=views,
+                viewers=viewers,
+                interactions=interactions,
+                follows=rng.randint(5, 25) * (i + 1),
+                video_views=int(views * rng.uniform(0.2, 0.5)),
+                reactions=int(interactions * rng.uniform(0.5, 0.75)),
+                comments=int(interactions * rng.uniform(0.08, 0.18)),
+                shares=int(interactions * rng.uniform(0.05, 0.12)),
             ))
         return out
 
@@ -110,10 +116,13 @@ class MockMetaClient:
         out = []
         for i in range(days):
             d = start + timedelta(days=i)
-            cpm = rng.randint(800, 4500)
-            net = rng.randint(200, 1200)
-            other = rng.randint(0, 400)
-            out.append(RevenuePoint(date=d.isoformat(), cpm_cents=cpm, network_cents=net, other_cents=other))
+            out.append(RevenuePoint(
+                date=d.isoformat(),
+                reels_cents=rng.randint(600, 3800),
+                photos_cents=rng.randint(100, 900),
+                stories_cents=rng.randint(50, 500),
+                text_cents=rng.randint(0, 200),
+            ))
         return out
 
     def ping_token(self, token: str) -> bool:

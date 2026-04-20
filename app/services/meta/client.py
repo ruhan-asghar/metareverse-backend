@@ -34,17 +34,26 @@ class PublishResult(BaseModel):
 
 class PageInsightPoint(BaseModel):
     date: str
-    reach: int
-    impressions: int
-    engagement: int
-    followers: int
+    views: int
+    viewers: int
+    interactions: int
+    follows: int
+    video_views: int = 0
+    reactions: int = 0
+    comments: int = 0
+    shares: int = 0
 
 
 class RevenuePoint(BaseModel):
     date: str
-    cpm_cents: int
-    network_cents: int
-    other_cents: int
+    reels_cents: int = 0
+    photos_cents: int = 0
+    stories_cents: int = 0
+    text_cents: int = 0
+
+    @property
+    def total_cents(self) -> int:
+        return self.reels_cents + self.photos_cents + self.stories_cents + self.text_cents
 
 
 class FBPageSummary(BaseModel):

@@ -35,17 +35,23 @@ def ingest_page_insights(page_id: str, days: int = 7):
                 cur.execute("""
                     INSERT INTO page_insights
                         (page_id, org_id, period_start, period_end,
-                         views, interactions, video_views, follows)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         views, viewers, interactions, follows, video_views,
+                         reactions, comments, shares)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (page_id, period_start, period_end) DO UPDATE SET
                         views        = EXCLUDED.views,
+                        viewers      = EXCLUDED.viewers,
                         interactions = EXCLUDED.interactions,
-                        video_views  = EXCLUDED.video_views,
                         follows      = EXCLUDED.follows,
+                        video_views  = EXCLUDED.video_views,
+                        reactions    = EXCLUDED.reactions,
+                        comments     = EXCLUDED.comments,
+                        shares       = EXCLUDED.shares,
                         fetched_at   = now()
                 """, (
                     page_id, row["org_id"], pt.date, pt.date,
-                    pt.reach, pt.engagement, pt.impressions, pt.followers,
+                    pt.views, pt.viewers, pt.interactions, pt.follows, pt.video_views,
+                    pt.reactions, pt.comments, pt.shares,
                 ))
             return len(data)
     finally:
@@ -66,15 +72,22 @@ def ingest_page_revenue(page_id: str, days: int = 7):
                 row["platform_page_id"], token, since.isoformat(), until.isoformat()
             )
             for pt in data:
-                total = int(pt.cpm_cents) + int(pt.network_cents) + int(pt.other_cents)
                 cur.execute("""
                     INSERT INTO revenue_records
-                        (page_id, org_id, date, total_cents)
-                    VALUES (%s, %s, %s, %s)
+                        (page_id, org_id, date, total_cents,
+                         reels_cents, photos_cents, stories_cents, text_cents)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (page_id, date) DO UPDATE SET
-                        total_cents = EXCLUDED.total_cents,
-                        fetched_at  = now()
-                """, (page_id, row["org_id"], pt.date, total))
+                        total_cents   = EXCLUDED.total_cents,
+                        reels_cents   = EXCLUDED.reels_cents,
+                        photos_cents  = EXCLUDED.photos_cents,
+                        stories_cents = EXCLUDED.stories_cents,
+                        text_cents    = EXCLUDED.text_cents,
+                        fetched_at    = now()
+                """, (
+                    page_id, row["org_id"], pt.date, pt.total_cents,
+                    pt.reels_cents, pt.photos_cents, pt.stories_cents, pt.text_cents,
+                ))
             return len(data)
     finally:
         conn.close()
