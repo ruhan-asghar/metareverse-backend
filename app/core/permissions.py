@@ -121,6 +121,29 @@ def is_platform_wide(roles: list[str]) -> bool:
     return "owner" in roles or "co_owner" in roles
 
 
+def require_roles(*required_roles: str):
+    """FastAPI dependency factory: require one of the listed roles on the user."""
+
+    async def checker(user: CurrentUser = Depends(require_org)):
+        roles, batch_ids, internal_id = get_user_roles_and_batches(
+            user.clerk_user_id, user.org_id
+        )
+        if not roles:
+            raise HTTPException(status_code=403, detail="No role assigned")
+        if not any(r in required_roles for r in roles):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires one of: {', '.join(required_roles)}",
+            )
+        user._roles = roles
+        user._batch_ids = batch_ids
+        user._internal_id = internal_id
+        user._is_platform_wide = is_platform_wide(roles)
+        return user
+
+    return Depends(checker)
+
+
 def require_permission(*permissions: Permission):
     """FastAPI dependency factory: require one or more permissions."""
 
