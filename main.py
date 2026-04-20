@@ -10,6 +10,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.core.logging import configure_logging
+from app.core.sentry import init_sentry_api
+configure_logging()
+init_sentry_api()
+
 from app.core.config import get_settings
 from app.api import webhooks, batches, pages, posts, approvals, posting_ids, team, uploads, reports, sse
 
