@@ -1,11 +1,20 @@
 """Page CRUD API."""
 
 from uuid import UUID
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends
 from app.core.auth import CurrentUser, require_org
 from app.core.database import get_db_cursor
 from app.core.permissions import Permission, require_permission, is_platform_wide, get_user_roles_and_batches
 from app.models.schemas import PageCreate, PageUpdate, PageOut, MessageResponse
+
+
+class BulkConnectBody(BaseModel):
+    batch_id: UUID
+    page_ids: list[UUID]
+    timezone: str | None = None
+    post_interval_hours: int | None = None
+    require_approval: bool | None = None
 
 router = APIRouter(prefix="/pages", tags=["pages"])
 
@@ -96,6 +105,89 @@ async def create_page(
         )
         row = cur.fetchone()
         return PageOut(**_serialize_page(row))
+
+
+@router.post("/bulk-connect")
+async def bulk_connect(
+    body: BulkConnectBody,
+    user: CurrentUser = require_permission(Permission.MANAGE_PAGES),
+):
+    """Assign many existing pages (e.g. newly OAuth-connected) to a batch at once.
+
+    Used after OAuth callback puts pages into 'Unassigned' — operator then
+    drags/multi-selects them into a real batch. Also flips status from
+    needs_setup → ready if a token is present.
+    """
+    if not body.page_ids:
+        raise HTTPException(status_code=400, detail="page_ids must be non-empty")
+
+    org_id = _get_org_id(user)
+
+    with get_db_cursor() as cur:
+        # Verify target batch
+        cur.execute(
+            "SELECT id FROM batches WHERE id = %s AND org_id = %s",
+            (body.batch_id, org_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        # Verify each page belongs to this org
+        cur.execute(
+            "SELECT id FROM pages WHERE id = ANY(%s) AND org_id = %s",
+            ([str(p) for p in body.page_ids], org_id),
+        )
+        found = {str(r["id"]) for r in cur.fetchall()}
+        missing = [str(p) for p in body.page_ids if str(p) not in found]
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Pages not found: {', '.join(missing)}",
+            )
+
+        # Build UPDATE
+        updates = ["batch_id = %s"]
+        params: list = [body.batch_id]
+
+        if body.timezone is not None:
+            updates.append("timezone = %s")
+            params.append(body.timezone)
+        if body.post_interval_hours is not None:
+            if body.post_interval_hours not in (1, 2, 3, 4, 6, 8):
+                raise HTTPException(status_code=400, detail="post_interval_hours must be one of 1,2,3,4,6,8")
+            updates.append("post_interval_hours = %s")
+            params.append(body.post_interval_hours)
+        if body.require_approval is not None:
+            updates.append("require_approval = %s")
+            params.append(body.require_approval)
+
+        # Flip status needs_setup → ready when a token exists
+        updates.append(
+            "status = CASE WHEN encrypted_access_token IS NOT NULL AND status = 'needs_setup' "
+            "THEN 'ready'::page_status ELSE status END"
+        )
+
+        params.extend([[str(p) for p in body.page_ids], org_id])
+
+        cur.execute(
+            f"UPDATE pages SET {', '.join(updates)} "
+            f"WHERE id = ANY(%s) AND org_id = %s RETURNING id, name, status, batch_id",
+            params,
+        )
+        rows = cur.fetchall()
+
+    return {
+        "updated": len(rows),
+        "pages": [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "status": r["status"],
+                "batch_id": str(r["batch_id"]),
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.patch("/{page_id}", response_model=PageOut)
