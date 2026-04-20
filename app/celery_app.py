@@ -39,6 +39,9 @@ celery_app.conf.update(
 
 celery_app.autodiscover_tasks(["app.tasks"])
 
+from app.tasks.beat_schedule import BEAT_SCHEDULE
+celery_app.conf.beat_schedule = BEAT_SCHEDULE
+
 
 @celery_app.on_after_configure.connect
 def setup_worker_sentry(sender, **kwargs):
