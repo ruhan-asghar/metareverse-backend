@@ -1,0 +1,11 @@
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-xdist==3.6.1
+testcontainers[postgres]==4.9.0
+fakeredis==2.26.1
+httpx==0.28.1
+ruff==0.8.4
+mypy==1.13.0
+# openapi-typescript is an npm package, installed via `npm i -D openapi-typescript@7.4.4`
+# openapi-typescript==7.4.4
