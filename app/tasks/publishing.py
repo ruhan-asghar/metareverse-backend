@@ -17,6 +17,19 @@ from app.services.sse_bus import get_sse_bus
 log = get_logger("tasks.publishing")
 
 
+_PLATFORM_POST_ID_COL = {
+    "facebook": "platform_post_id_fb",
+    "instagram": "platform_post_id_ig",
+    "threads": "platform_post_id_th",
+}
+
+_CAPTION_KEY = {
+    "facebook": "caption_facebook",
+    "instagram": "caption_instagram",
+    "threads": "caption_threads",
+}
+
+
 def _publish_event(org_id: str, event_type: str, payload: dict):
     try:
         asyncio.run(get_sse_bus().publish(org_id, event_type, payload))
@@ -30,33 +43,52 @@ def _claim(cur, post_id: str) -> dict | None:
         UPDATE posts
            SET status='publishing', publishing_started_at=now()
          WHERE id=%s AND status IN ('queued', 'failed_temporary')
-         RETURNING id, org_id, page_id, platform, media_type, caption, media_urls, thread_comments
+         RETURNING id, org_id, page_id, media_type,
+                   caption_facebook, caption_instagram, caption_threads,
+                   publish_to_facebook, publish_to_instagram, publish_to_threads
     """, (post_id,))
     row = cur.fetchone()
     return dict(row) if row else None
 
 
 def _load_page_and_token(cur, page_id: str):
-    cur.execute("""SELECT id, platform_page_id, token_encrypted, token_iv, token_expires_at, status, batch_id, org_id
+    cur.execute("""SELECT id, platform, platform_page_id, encrypted_access_token,
+                          token_expires_at, status, batch_id, org_id
                      FROM pages WHERE id=%s""", (page_id,))
     page = cur.fetchone()
-    if not page:
+    if not page or not page["encrypted_access_token"]:
         return None
-    token = decrypt_token(bytes(page["token_encrypted"]), bytes(page["token_iv"]))
+    token = decrypt_token(bytes(page["encrypted_access_token"]))
     return dict(page), token
+
+
+def _load_media_urls(cur, post_id: str) -> list[str]:
+    cur.execute(
+        """SELECT file_url FROM post_media WHERE post_id=%s ORDER BY sort_order""",
+        (post_id,),
+    )
+    return [r["file_url"] for r in cur.fetchall()]
+
+
+def _load_thread_comments(cur, post_id: str) -> list[str]:
+    cur.execute(
+        """SELECT content FROM thread_comments WHERE post_id=%s ORDER BY sort_order""",
+        (post_id,),
+    )
+    return [r["content"] for r in cur.fetchall()]
 
 
 def _load_candidates(cur, page_id: str) -> list[PostingIDCandidate]:
     cur.execute("""
-        SELECT pi.id, pi.status, pi.health_score, MAX(p.published_at) AS last_used_at
+        SELECT pi.id, pi.status, pi.health_score, pi.last_used_at
           FROM posting_ids pi
           JOIN page_posting_id_assignments a ON a.posting_id_id = pi.id
-          LEFT JOIN posts p ON p.posting_id_id = pi.id AND p.status='published'
          WHERE a.page_id = %s
-      GROUP BY pi.id
     """, (page_id,))
-    return [PostingIDCandidate(id=str(r["id"]), status=r["status"], health_score=r["health_score"],
-                                last_used_at=r["last_used_at"]) for r in cur.fetchall()]
+    return [PostingIDCandidate(id=str(r["id"]), status=r["status"],
+                                health_score=r["health_score"],
+                                last_used_at=r["last_used_at"])
+            for r in cur.fetchall()]
 
 
 def publish_post_impl(post_id: str) -> None:
@@ -72,53 +104,106 @@ def publish_post_impl(post_id: str) -> None:
 
             page_tok = _load_page_and_token(cur, post["page_id"])
             if not page_tok:
-                cur.execute("UPDATE posts SET status='failed_permanent' WHERE id=%s", (post_id,))
+                cur.execute(
+                    """UPDATE posts
+                          SET status='failed_needs_editing',
+                              failed_category='needs_editing',
+                              publishing_started_at=NULL
+                        WHERE id=%s""",
+                    (post_id,),
+                )
                 return
             page, token = page_tok
+
+            platform = page["platform"]
+            caption = post.get(_CAPTION_KEY[platform]) or ""
+            media_urls = _load_media_urls(cur, post_id)
+            thread_comments = _load_thread_comments(cur, post_id)
 
             candidates = _load_candidates(cur, post["page_id"])
             posting_id = pick_round_robin(candidates)
             if not posting_id:
-                cur.execute("UPDATE posts SET status='paused' WHERE id=%s", (post_id,))
+                cur.execute(
+                    "UPDATE posts SET status='paused', publishing_started_at=NULL WHERE id=%s",
+                    (post_id,),
+                )
                 _publish_event(org_id, "post_paused", {"post_id": str(post_id)})
                 return
 
             try:
-                if post["platform"] == "facebook":
-                    out = publish_fb_post(get_meta_client(), page_id=page["platform_page_id"], token=token,
-                                          media_type=post["media_type"], caption=post["caption"] or "",
-                                          media_urls=list(post["media_urls"] or []),
-                                          thread_comments=list(post["thread_comments"] or []))
-                elif post["platform"] == "instagram":
-                    out = publish_ig_post(get_meta_client(), page_id=page["platform_page_id"], token=token,
-                                          media_type=post["media_type"], caption=post["caption"] or "",
-                                          media_urls=list(post["media_urls"] or []))
+                if platform == "facebook":
+                    out = publish_fb_post(
+                        get_meta_client(), page_id=page["platform_page_id"], token=token,
+                        media_type=post["media_type"], caption=caption,
+                        media_urls=media_urls, thread_comments=thread_comments,
+                    )
+                elif platform == "instagram":
+                    out = publish_ig_post(
+                        get_meta_client(), page_id=page["platform_page_id"], token=token,
+                        media_type=post["media_type"], caption=caption,
+                        media_urls=media_urls,
+                    )
                 else:
-                    out = publish_threads_post(get_meta_client(), page_id=page["platform_page_id"], token=token,
-                                               media_type=post["media_type"], caption=post["caption"] or "",
-                                               media_urls=list(post["media_urls"] or []))
-                cur.execute("""
-                    UPDATE posts SET status='published', platform_post_id=%s, posting_id_id=%s,
-                           published_at=now(), publishing_started_at=NULL
+                    out = publish_threads_post(
+                        get_meta_client(), page_id=page["platform_page_id"], token=token,
+                        media_type=post["media_type"], caption=caption,
+                        media_urls=media_urls,
+                    )
+                platform_col = _PLATFORM_POST_ID_COL[platform]
+                cur.execute(
+                    f"""
+                    UPDATE posts SET status='published', {platform_col}=%s,
+                           posting_id_used=%s, published_at=now(),
+                           publishing_started_at=NULL
                      WHERE id=%s
-                """, (out.platform_post_id, posting_id.id, post_id))
+                    """,
+                    (out.platform_post_id, posting_id.id, post_id),
+                )
+                cur.execute(
+                    "UPDATE posting_ids SET last_used_at=now() WHERE id=%s",
+                    (posting_id.id,),
+                )
+                cur.execute(
+                    """UPDATE page_posting_id_assignments
+                          SET last_used_at=now()
+                        WHERE page_id=%s AND posting_id_id=%s""",
+                    (post["page_id"], posting_id.id),
+                )
                 _publish_event(org_id, "post_published",
                                {"post_id": str(post_id), "platform_post_id": out.platform_post_id})
             except TokenExpired:
-                cur.execute("UPDATE posts SET status='reconnect_required', publishing_started_at=NULL WHERE id=%s",
-                            (post_id,))
-                _publish_event(org_id, "token_expired", {"post_id": str(post_id), "page_id": str(post["page_id"])})
+                cur.execute(
+                    "UPDATE posts SET status='reconnect_required', publishing_started_at=NULL WHERE id=%s",
+                    (post_id,),
+                )
+                _publish_event(org_id, "token_expired",
+                               {"post_id": str(post_id), "page_id": str(post["page_id"])})
             except PostingIDRevoked:
                 cur.execute("UPDATE posting_ids SET status='retired' WHERE id=%s", (posting_id.id,))
-                cur.execute("UPDATE posts SET status='paused', publishing_started_at=NULL WHERE id=%s", (post_id,))
+                cur.execute(
+                    "UPDATE posts SET status='paused', publishing_started_at=NULL WHERE id=%s",
+                    (post_id,),
+                )
                 _publish_event(org_id, "post_paused", {"post_id": str(post_id)})
             except MediaRejected:
-                cur.execute("UPDATE posts SET status='failed_permanent', publishing_started_at=NULL WHERE id=%s",
-                            (post_id,))
+                cur.execute(
+                    """UPDATE posts
+                          SET status='failed_needs_editing',
+                              failed_category='needs_editing',
+                              publishing_started_at=NULL
+                        WHERE id=%s""",
+                    (post_id,),
+                )
                 _publish_event(org_id, "post_failed", {"post_id": str(post_id), "permanent": True})
             except (MetaTimeout, TransientMetaError, RateLimited):
-                cur.execute("UPDATE posts SET status='failed_temporary', publishing_started_at=NULL WHERE id=%s",
-                            (post_id,))
+                cur.execute(
+                    """UPDATE posts
+                          SET status='failed_temporary',
+                              failed_category='temporary_issue',
+                              publishing_started_at=NULL
+                        WHERE id=%s""",
+                    (post_id,),
+                )
                 _publish_event(org_id, "post_failed", {"post_id": str(post_id), "permanent": False})
                 raise
     finally:

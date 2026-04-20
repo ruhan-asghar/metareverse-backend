@@ -2,25 +2,28 @@ from app.core.database import get_connection
 
 
 def recompute_org_health_scores(org_id: str) -> None:
+    """Recompute health scores for all posting_ids in an org.
+
+    Formula: round((reach_28d / max_reach_28d_on_account) * 100), scoped per org.
+    Uses posting_ids.reach_28d (populated separately by insights ingestion).
+    """
     conn = get_connection()
     try:
         with conn, conn.cursor() as cur:
-            cur.execute("""
-                WITH pid_reach AS (
-                  SELECT pi.id AS posting_id, COALESCE(SUM(post_i.reach), 0) AS reach_28d
-                    FROM posting_ids pi
-                    LEFT JOIN posts p ON p.posting_id_id = pi.id
-                       AND p.published_at >= now() - interval '28 days'
-                    LEFT JOIN post_insights post_i ON post_i.post_id = p.id
-                   WHERE pi.org_id = %s
-                GROUP BY pi.id
-                ),
-                max_reach AS (SELECT GREATEST(MAX(reach_28d), 1) AS m FROM pid_reach)
+            cur.execute(
+                """
+                WITH max_reach AS (
+                    SELECT GREATEST(COALESCE(MAX(reach_28d), 0), 1) AS m
+                      FROM posting_ids
+                     WHERE org_id = %s
+                )
                 UPDATE posting_ids pi
-                   SET health_score = LEAST(100, GREATEST(0, ROUND((pr.reach_28d::numeric / mr.m) * 100)::int)),
-                       reach_28d = pr.reach_28d
-                  FROM pid_reach pr, max_reach mr
-                 WHERE pi.id = pr.posting_id
-            """, (org_id,))
+                   SET health_score = LEAST(100, GREATEST(0,
+                       ROUND((COALESCE(pi.reach_28d, 0)::numeric / mr.m) * 100)::int))
+                  FROM max_reach mr
+                 WHERE pi.org_id = %s
+                """,
+                (org_id, org_id),
+            )
     finally:
         conn.close()

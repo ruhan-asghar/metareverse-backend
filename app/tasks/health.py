@@ -20,9 +20,11 @@ def ping_page_token(page_id: str):
             with conn, conn.cursor() as cur:
                 cur.execute("""SELECT p.org_id, p.name, u.email, u.id
                                  FROM pages p
-                                 JOIN team_members tm ON tm.batch_id = p.batch_id
+                                 JOIN team_members tm ON tm.org_id = p.org_id
                                  JOIN users u ON u.id = tm.user_id
-                                WHERE p.id=%s AND 'owner' = ANY(tm.roles)""", (page_id,))
+                                WHERE p.id=%s
+                                  AND ('owner' = ANY(tm.roles) OR 'co_owner' = ANY(tm.roles))
+                                LIMIT 1""", (page_id,))
                 row = cur.fetchone()
                 if row:
                     org_id = str(row["org_id"])

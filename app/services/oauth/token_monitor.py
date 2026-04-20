@@ -8,13 +8,16 @@ def ping_token_for_page(page_id: str) -> str:
     conn = get_connection()
     try:
         with conn, conn.cursor() as cur:
-            cur.execute("""SELECT token_encrypted, token_iv, token_expires_at
+            cur.execute("""SELECT encrypted_access_token, token_expires_at
                              FROM pages WHERE id=%s""", (page_id,))
             row = cur.fetchone()
             if not row:
                 return "not_found"
+            if not row["encrypted_access_token"]:
+                cur.execute("UPDATE pages SET status='token_expired' WHERE id=%s", (page_id,))
+                return "token_expired"
             try:
-                token = decrypt_token(bytes(row["token_encrypted"]), bytes(row["token_iv"]))
+                token = decrypt_token(bytes(row["encrypted_access_token"]))
             except Exception:
                 cur.execute("UPDATE pages SET status='token_expired' WHERE id=%s", (page_id,))
                 return "token_expired"

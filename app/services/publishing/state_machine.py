@@ -10,7 +10,7 @@ class PostStatus(StrEnum):
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED_TEMPORARY = "failed_temporary"
-    FAILED_PERMANENT = "failed_permanent"
+    FAILED_NEEDS_EDITING = "failed_needs_editing"
     RECONNECT_REQUIRED = "reconnect_required"
     PAUSED = "paused"
 
@@ -28,7 +28,7 @@ LEGAL_TRANSITIONS = frozenset({
     (PostStatus.QUEUED, PostStatus.PAUSED),
     (PostStatus.PUBLISHING, PostStatus.PUBLISHED),
     (PostStatus.PUBLISHING, PostStatus.FAILED_TEMPORARY),
-    (PostStatus.PUBLISHING, PostStatus.FAILED_PERMANENT),
+    (PostStatus.PUBLISHING, PostStatus.FAILED_NEEDS_EDITING),
     (PostStatus.PUBLISHING, PostStatus.RECONNECT_REQUIRED),
     (PostStatus.PUBLISHING, PostStatus.PAUSED),
     (PostStatus.FAILED_TEMPORARY, PostStatus.QUEUED),
