@@ -1,6 +1,8 @@
 import os
 import pytest
 import fakeredis
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
@@ -38,3 +40,20 @@ def api_client():
 @pytest.fixture
 def auth_headers():
     return {"Authorization": "Bearer fake-jwt", "X-Org-Id": "org_test"}
+
+
+@pytest.fixture
+def db_conn():
+    from app.core.config import get_settings
+    s = get_settings()
+    conn = psycopg2.connect(s.database_url)
+    yield conn
+    conn.rollback()
+    conn.close()
+
+
+@pytest.fixture
+def db_cursor(db_conn):
+    cur = db_conn.cursor(cursor_factory=RealDictCursor)
+    yield cur
+    cur.close()
