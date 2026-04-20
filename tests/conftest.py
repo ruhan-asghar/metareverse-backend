@@ -43,6 +43,36 @@ def auth_headers():
 
 
 @pytest.fixture
+def auth_headers_mock(monkeypatch):
+    """Mock Clerk JWT verification to bypass real auth for endpoint tests."""
+    from app.core import auth as auth_mod
+
+    class _FakeUser:
+        def __init__(self):
+            self.clerk_user_id = "user_test"
+            self.org_id = "org_test"
+            self.org_role = "owner"
+            self.org_slug = "test"
+            self.email = "test@example.com"
+            self.claims = {"sub": "user_test", "org_id": "org_test"}
+
+    async def _fake_get_current_user(*args, **kwargs):
+        return _FakeUser()
+
+    async def _fake_require_org(*args, **kwargs):
+        return _FakeUser()
+
+    from main import app
+    from app.core.auth import get_current_user, require_org
+
+    app.dependency_overrides[get_current_user] = _fake_get_current_user
+    app.dependency_overrides[require_org] = _fake_require_org
+    yield {"Authorization": "Bearer mock"}
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(require_org, None)
+
+
+@pytest.fixture
 def db_conn():
     from app.core.config import get_settings
     s = get_settings()
