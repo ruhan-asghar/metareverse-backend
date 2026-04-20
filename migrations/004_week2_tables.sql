@@ -42,5 +42,8 @@ CREATE TABLE IF NOT EXISTS system_metrics (
 );
 CREATE INDEX IF NOT EXISTS system_metrics_recorded_idx ON system_metrics(recorded_at DESC);
 
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS reclaim_count int DEFAULT 0;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS reclaim_count int NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS publishing_started_at timestamptz;
+CREATE INDEX IF NOT EXISTS idx_posts_publishing_started
+  ON posts(publishing_started_at)
+  WHERE status = 'publishing';
